@@ -1,0 +1,96 @@
+import SwiftCheck
+@testable import Abstract
+
+{% macro checkError typeNameString %}{% if typeNameString == "Error" %}String{% else %}{{ typeNameString }}{% endif %}{% endmacro %}
+{% macro iterateVariables variables %}
+                {% for var in variables %}
+                  {% if var.actualTypeName.name|hasPrefix:"UI" %}
+                    {{ var.name }}: {{ var.actualTypeName.name }}.init(){% if not forloop.last %},{% endif %} 
+                  {% else %}
+                    {{ var.name }}: $0.generate(){% if not forloop.last %}, {% endif %}
+                  {% endif %}
+                {% endfor %}
+{% endmacro %}
+{% macro iterateCases cases pureTypeName optionalGenericParameter %}
+        {% for case in cases %}
+            {% if not case.hasAssociatedValue %}
+            Gen.pure({{ pureTypeName }}{{ optionalGenericParameter }}.{{ case.name }}){% if not forloop.last %},{% endif %}
+            {% elif case.associatedValues.count == 1 %}
+              {% if case.associatedValues.first.actualTypeName.name|hasPrefix:"UI" %}
+            Gen<{{ case.associatedValues.first.actualTypeName.name }}>.pure({{ case.associatedValues.first.actualTypeName.name }}.init()).map({{ type.name }}.{{ case.name }}){% if not forloop.last %},{% endif %}
+              {% elif case.associatedValues.first.isOptional %}
+            {% call caseOptional type case case.associatedValues.first %}
+              {% elif case.associatedValues.first.isArray %}
+            {% call caseArray type case case.associatedValues.first %}
+              {% elif case.associatedValues.first.isDictionary %}
+            {% call caseDictionary type case case.associatedValues.first %}
+              {% else %}
+            {% call checkError case.associatedValues.first.actualTypeName.name %}.arbitrary.map({{ type.name }}.{{ case.name }}){% if not forloop.last %},{% endif %}
+              {% endif %}
+            {% else %}
+            GenZip.with(
+              {% for assoVal in case.associatedValues %}
+                {% if assoVal.actualTypeName.name|hasPrefix:"UI" %}
+              Gen<{{ assoVal.actualTypeName.name }}>.pure({{ assoVal.actualTypeName.name }}.init()){% if not forloop.last %},{% endif %}
+                {% elif case.associatedValues.first.isOptional %}
+              {% call caseOptional type case assoVal %}
+                {% elif case.associatedValues.first.isArray %}
+              {% call caseArray type case assoVal %}
+                {% elif case.associatedValues.first.isDictionary %}
+              {% call caseDictionary type case assoVal %}
+                {% else %}
+              {% call checkError assoVal.actualTypeName.name %}.arbitrary{% if not forloop.last %},{% endif %}{% endif %}{% endfor %})
+              .map({{ type.name}}.{{ case.name }}){% if not forloop.last %},{% endif %}
+            {% endif %}
+        {% endfor %}
+{% endmacro %}
+
+// MARK: - Arbitrary for structs and classes
+{% for type in types.all|!enum|annotated:"arbitrary" %}
+
+{% if type.isGeneric %}
+extension {{ type.name }}: Arbitrary where {{ type.annotations.constrainedArbitraryParameter }}: Arbitrary {
+	public static var arbitrary: Gen<{{ type.name }}> {
+		return Gen<{{ type.name }}>
+			.compose {
+				{{ type.name }}.init(
+					{% call iterateVariables type.storedVariables %}
+				)
+		}
+	}
+}
+{% else %}
+extension {{ type.name }}: Arbitrary {
+    public static var arbitrary: Gen<{{ type.name }}> {
+        return Gen<{{ type.name }}>
+            .compose {
+                {{ type.name }}.init(
+                {% call iterateVariables type.storedVariables %}
+                )
+        }
+    }
+}
+{% endif %}
+{% endfor %}
+
+// MARK: - Arbitrary for enums
+{% for type in types.enums|annotated:"arbitrary" %}
+
+{% if type.isGeneric %}
+extension {{ type.name }}: Arbitrary where {{ type.annotations.constrainedArbitraryParameter }}: Arbitrary {
+	public static var arbitrary: Gen<{{ type.name}}> {
+		return Gen<{{ type.name}}>.one(of: [
+			{% call iterateCases type.cases type.name "" %}
+		])
+	}
+}
+{% else %}
+extension {{ type.name }}: Arbitrary {
+    public static var arbitrary: Gen<{{ type.name}}> {
+        return Gen<{{ type.name}}>.one(of: [
+        {% call iterateCases type.cases type.name "" %}
+        ])
+    }
+}
+{% endif %}
+{% endfor %}
